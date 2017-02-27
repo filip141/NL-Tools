@@ -2,9 +2,12 @@
 # -*- coding: utf-8 -*-
 import re
 import ast
-import json
-import morfeusz2
-import numpy as np
+import platform
+
+if platform.system() == 'Windows':
+    import morfeusz
+else:
+    import morfeusz2
 
 emoticons_str = r"""
     (?:
@@ -34,9 +37,12 @@ class WordTokenizer(object):
         Regular Expression
     '''
 
-    def __init__(self, punfile="punctation.txt", stopfile="stopwords.txt"):
+    def __init__(self, punfile="../data/punctation.txt", stopfile="../data/stopwords.txt"):
         # Initialize Morfeusz
-        self.morf = morfeusz2.Morfeusz()
+        if platform.system() == 'Windows':
+            self.morf = morfeusz
+        else:
+            self.morf = morfeusz2.Morfeusz()
         # Initialize files
         self.__punfile = punfile
         self.__stopfile = stopfile
@@ -92,5 +98,11 @@ class WordTokenizer(object):
         return intersection_cardinality / float(union_cardinality)
 
     def get_polish_letters(self, word):
-        sword = self.morf.analyse(word)
-        return sword[0][2][1].split(":")[0].lower()
+        if platform.system() == 'Windows':
+            try:
+                sword = self.morf.analyse(word)
+                return sword[0][0][1].lower()
+            except KeyError:
+                return word
+        else:
+            return sword[0][2][1].split(":")[0].lower()
