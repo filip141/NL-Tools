@@ -1,8 +1,11 @@
+import os
 import random
 import codecs
 import logging
 import numpy as np
+import matplotlib.pyplot as plt
 from collections import Counter
+from sklearn.manifold import TSNE
 from nlang_preprocess import WordTokenizer
 
 logging.basicConfig(level=logging.INFO)
@@ -10,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class Word2Vec(object):
-    def __init__(self, tokens, vec_dim=1000, context=5, neg_num=10, alpha=0.025, epoch=5):
+    def __init__(self, tokens, vec_dim=1000, context=5, neg_num=10, alpha=0.025, epoch=5, cross_groups=10):
         self.alpha = alpha
         self.epoch = epoch
         self.neg_num = neg_num
@@ -18,6 +21,7 @@ class Word2Vec(object):
         self.tokens = tokens
         self.vec_dim = vec_dim
         self.word_set = set(tokens)
+        self.cross_groups = cross_groups
         self.vocab_words = len(self.word_set)
         # Word 2 id conversion
         self.word2id = dict([(word, idx) for idx, word in enumerate(self.word_set)])
@@ -57,25 +61,76 @@ class Word2Vec(object):
             samples.append(counter)
         return samples
 
+    def crossvalidate(self, n_groups):
+        cross_groups = []
+        length_diff = len(self.tokens) / n_groups
+        for token_idx in xrange(1, n_groups + 1):
+            start_tok = (token_idx - 1) * length_diff
+            end_tok = token_idx * length_diff
+            cross_groups.append(self.tokens[start_tok: end_tok])
+        return cross_groups
+
     def train(self):
         logger.info("Training model. Vocabulary length: {}, Hidden Layer: {}, Window: {}"
                     .format(self.vocab_words, self.vec_dim, self.context))
+        cr_groups = self.crossvalidate(self.cross_groups)
         for epch in xrange(0, self.epoch):
             logger.info("Epoch: {}".format(epch))
-            self.train_epoch()
+            for test_idx in xrange(0, self.cross_groups):
+                test_set = cr_groups[test_idx]
+                training_set = sum([cr_groups[idx]
+                                    for idx in xrange(0, self.cross_groups)
+                                    if idx != test_idx], []
+                                   )
+                self.train_epoch(training_set)
+                accuracy, recall, precision, fscore = self.validate_epoch(test_set)
+                logger.info("Fold: {}, Accuracy: {}, Precision: {}, Recall: {}, Fscore: {}"
+                            .format(test_idx, accuracy, precision, recall, fscore))
+        self.save()
 
-    def train_epoch(self):
-        diff_sum = 0
-        last_wnd = len(self.tokens) - self.context - 1
+    def validate_epoch(self, test_set):
+        con_mat = np.zeros((2, 2))
+        last_wnd = len(test_set) - self.context - 1
         for word_idx in xrange(self.context, last_wnd):
-            if word_idx % (last_wnd / 10) == 0:
-                logger.info("Epoch Progress: {}%".format((word_idx / (last_wnd / 10)) * 10))
-                logger.info("Vectors sum difference: {}, Log diff: {}".format(diff_sum, np.log(-diff_sum)))
             # Set windows length
             start_idx = word_idx - self.context
             end_idx = word_idx + self.context + 1
             # Construct windows
-            word_window = [self.word2id[word] for word in self.tokens[start_idx: end_idx]]
+            word_window = [self.word2id[word] for word in test_set[start_idx: end_idx]]
+            word_center = word_window.pop((end_idx - start_idx) / 2)
+            labels = [1.0] * (end_idx - start_idx - 1)
+
+            # Get negative samples
+            neg_samples = self.sample_unigram_dist(number=self.neg_num)
+            labels = labels + [0.0] * self.neg_num
+            cntx_words = word_window + neg_samples
+
+            # Center word window
+            vc = self.word_vec[word_center]
+            vw = self.context_vec[cntx_words]
+            sigmoid = 1. / (1. + np.exp(-np.dot(vw, vc.T)))
+            for ll, sg in zip(labels, np.round(sigmoid)):
+                con_mat[int(ll), int(sg)] += 1
+        accuracy = (con_mat[0, 0] + con_mat[1, 1]) / np.sum(con_mat)
+        acc_p = np.sum(con_mat, axis=1)
+        acc_p[acc_p == 0] = 1
+        recall = ((con_mat[0, 0] / acc_p[0]) + (con_mat[1, 1] / acc_p[1])) / 2.0
+        pred = np.sum(con_mat, axis=0)
+        pred[pred == 0] = 1
+        precision = ((con_mat[0, 0] / pred[0]) + (con_mat[1, 1] / pred[1])) / 2.0
+        fscore = 2 * ((precision * recall) / (precision + recall))
+        return accuracy, recall, precision, fscore
+
+    def train_epoch(self, training_set):
+        last_wnd = len(training_set) - self.context - 1
+        for word_idx in xrange(self.context, last_wnd):
+            if word_idx % (last_wnd / 10) == 0:
+                logger.info("Train Epoch Progress: {}%".format((word_idx / (last_wnd / 10)) * 10))
+            # Set windows length
+            start_idx = word_idx - self.context
+            end_idx = word_idx + self.context + 1
+            # Construct windows
+            word_window = [self.word2id[word] for word in training_set[start_idx: end_idx]]
             word_center = word_window.pop((end_idx - start_idx) / 2)
             labels = [1.0]*(end_idx - start_idx - 1)
 
@@ -88,10 +143,39 @@ class Word2Vec(object):
             vc = self.word_vec[word_center]
             vw = self.context_vec[cntx_words]
             sigmoid = 1. / (1. + np.exp(-np.dot(vw, vc.T)))
-            lab_dif = (sigmoid - np.array(labels)) * self.alpha
-            self.context_vec[cntx_words] -= np.repeat(vc[np.newaxis, :], 20, axis=0) * lab_dif[:, np.newaxis]
-            self.word_vec[word_center] -= np.sum(vw * lab_dif[:, np.newaxis], axis=0)
-            diff_sum = diff_sum - (np.sum(self.context_vec) + np.sum(self.word_vec))
+            lab_dif = (np.array(labels) - sigmoid) * self.alpha
+            self.context_vec[cntx_words] += np.repeat(vc[np.newaxis, :], 20, axis=0) * lab_dif[:, np.newaxis]
+            self.word_vec[word_center] += np.sum(vw * lab_dif[:, np.newaxis], axis=0)
+
+    def save(self, path=None):
+        if path is None:
+            if not os.path.isdir("../data/model/"):
+                os.mkdir("../data/model/")
+            path = "../data/model/word2vec.npz"
+        np.savez(path, neg_num=self.neg_num, context=self.context, vec_dim=self.vec_dim,
+                 word2id=self.word2id, id2word=self.id2word, context_vec=self.context_vec,
+                 word_vec=self.word_vec)
+
+    def load(self, path=None):
+        if path is None:
+            path = "../data/model/word2vec.npz"
+        with np.load(path) as X:
+            self.neg_num = X["neg_num"]
+            self.context = X["context"]
+            self.vec_dim = X["vec_dim"]
+            self.word2id = X["word2id"]
+            self.id2word = X["id2word"]
+            self.context_vec = X["context_vec"]
+            self.word_vec = X["word_vec"]
+
+    def plot(self):
+        tsne = TSNE(n_components=2, random_state=0)
+        all_vector_matrix = self.word_vec + self.context_vec
+        all_vector_matrix_2d = tsne.fit_transform(all_vector_matrix)
+        word_list = list(self.word_set)
+        for i in xrange(len(word_list)):
+            plt.text(all_vector_matrix_2d[i, 0], all_vector_matrix_2d[i, 1], word_list[i])
+        plt.show()
 
 
 if __name__ == '__main__':
@@ -102,5 +186,7 @@ if __name__ == '__main__':
         corpus = text_file.read()
     # Text to tokens
     token_list = word_token.text2tokens(corpus)
-    w2v = Word2Vec(token_list, epoch=30, alpha=0.05)
+    w2v = Word2Vec(token_list, epoch=50, alpha=0.05)
+    # w2v.load()
+    # w2v.plot()
     w2v.train()
