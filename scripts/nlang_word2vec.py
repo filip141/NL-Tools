@@ -62,16 +62,24 @@ class Word2Vec(object):
             samples.append(counter)
         return samples
 
-    def train(self):
+    def train(self, no_test=False):
+        test_set = None
         logger.info("Training model. Vocabulary length: {}, Hidden Layer: {}, Window: {}"
                     .format(self.vocab_words, self.vec_dim, self.context))
-        training_set, test_set = split_dataset(0.3, self.tokens)
+        # If not_test option is used
+        if not no_test:
+            training_set, test_set = split_dataset(self.test_set_percent, self.tokens)
+        else:
+            training_set = self.tokens
+        # Iterate every epoch
         for epch in xrange(0, self.epoch):
             logger.info("Epoch: {}".format(epch))
             self.train_epoch(training_set)
-            accuracy, recall, precision, fscore = self.validate_epoch(test_set)
-            logger.info("Accuracy: {}, Precision: {}, Recall: {}, Fscore: {}"
-                        .format(accuracy, precision, recall, fscore))
+            # Verify training on test set
+            if test_set:
+                accuracy, recall, precision, fscore = self.validate_epoch(test_set)
+                logger.info("Accuracy: {}, Precision: {}, Recall: {}, Fscore: {}"
+                            .format(accuracy, precision, recall, fscore))
         self.save()
 
     def validate_epoch(self, test_set):
