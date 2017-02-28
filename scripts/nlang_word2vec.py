@@ -74,9 +74,9 @@ class Word2Vec(object):
         logger.info("Training model. Vocabulary length: {}, Hidden Layer: {}, Window: {}"
                     .format(self.vocab_words, self.vec_dim, self.context))
         cr_groups = self.crossvalidate(self.cross_groups)
-        for epch in xrange(0, self.epoch):
-            logger.info("Epoch: {}".format(epch))
-            for test_idx in xrange(0, self.cross_groups):
+        for test_idx in xrange(0, self.cross_groups):
+            for epch in xrange(0, self.epoch):
+                logger.info("Epoch: {}, Fold: {}".format(epch, test_idx))
                 test_set = cr_groups[test_idx]
                 training_set = sum([cr_groups[idx]
                                     for idx in xrange(0, self.cross_groups)
@@ -84,8 +84,8 @@ class Word2Vec(object):
                                    )
                 self.train_epoch(training_set)
                 accuracy, recall, precision, fscore = self.validate_epoch(test_set)
-                logger.info("Fold: {}, Accuracy: {}, Precision: {}, Recall: {}, Fscore: {}"
-                            .format(test_idx, accuracy, precision, recall, fscore))
+                logger.info("Accuracy: {}, Precision: {}, Recall: {}, Fscore: {}"
+                            .format(accuracy, precision, recall, fscore))
         self.save()
 
     def validate_epoch(self, test_set):
