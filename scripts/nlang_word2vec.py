@@ -7,13 +7,14 @@ import matplotlib.pyplot as plt
 from collections import Counter
 from sklearn.manifold import TSNE
 from nlang_preprocess import WordTokenizer
+from nlang_testing import split_dataset
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class Word2Vec(object):
-    def __init__(self, tokens, vec_dim=1000, context=5, neg_num=10, alpha=0.025, epoch=5, cross_groups=10):
+    def __init__(self, tokens, vec_dim=1000, context=5, neg_num=10, alpha=0.025, epoch=5, test_set_percent=0.3):
         self.alpha = alpha
         self.epoch = epoch
         self.neg_num = neg_num
@@ -21,8 +22,8 @@ class Word2Vec(object):
         self.tokens = tokens
         self.vec_dim = vec_dim
         self.word_set = set(tokens)
-        self.cross_groups = cross_groups
         self.vocab_words = len(self.word_set)
+        self.test_set_percent = test_set_percent
         # Word 2 id conversion
         self.word2id = dict([(word, idx) for idx, word in enumerate(self.word_set)])
         self.id2word = dict([(idx, word) for idx, word in enumerate(self.word_set)])
@@ -61,31 +62,16 @@ class Word2Vec(object):
             samples.append(counter)
         return samples
 
-    def crossvalidate(self, n_groups):
-        cross_groups = []
-        length_diff = len(self.tokens) / n_groups
-        for token_idx in xrange(1, n_groups + 1):
-            start_tok = (token_idx - 1) * length_diff
-            end_tok = token_idx * length_diff
-            cross_groups.append(self.tokens[start_tok: end_tok])
-        return cross_groups
-
     def train(self):
         logger.info("Training model. Vocabulary length: {}, Hidden Layer: {}, Window: {}"
                     .format(self.vocab_words, self.vec_dim, self.context))
-        cr_groups = self.crossvalidate(self.cross_groups)
-        for test_idx in xrange(0, self.cross_groups):
-            for epch in xrange(0, self.epoch):
-                logger.info("Epoch: {}, Fold: {}".format(epch, test_idx))
-                test_set = cr_groups[test_idx]
-                training_set = sum([cr_groups[idx]
-                                    for idx in xrange(0, self.cross_groups)
-                                    if idx != test_idx], []
-                                   )
-                self.train_epoch(training_set)
-                accuracy, recall, precision, fscore = self.validate_epoch(test_set)
-                logger.info("Accuracy: {}, Precision: {}, Recall: {}, Fscore: {}"
-                            .format(accuracy, precision, recall, fscore))
+        training_set, test_set = split_dataset(0.3, self.tokens)
+        for epch in xrange(0, self.epoch):
+            logger.info("Epoch: {}".format(epch))
+            self.train_epoch(training_set)
+            accuracy, recall, precision, fscore = self.validate_epoch(test_set)
+            logger.info("Accuracy: {}, Precision: {}, Recall: {}, Fscore: {}"
+                        .format(accuracy, precision, recall, fscore))
         self.save()
 
     def validate_epoch(self, test_set):

@@ -105,4 +105,5 @@ class WordTokenizer(object):
             except KeyError:
                 return word
         else:
+            sword = self.morf.analyse(word)
             return sword[0][2][1].split(":")[0].lower()
